@@ -129,7 +129,7 @@ def plot_frame( hometeam, awayteam, figax=None, team_colors=('r','b'), field_dim
     for team,color in zip( [hometeam,awayteam], team_colors) :
         x_columns = [c for c in team.keys() if c[-2:].lower()=='_x' and c!='ball_x'] # column header for player x positions
         y_columns = [c for c in team.keys() if c[-2:].lower()=='_y' and c!='ball_y'] # column header for player y positions
-        ax.plot( team[x_columns], team[y_columns], color+'o', MarkerSize=PlayerMarkerSize, alpha=PlayerAlpha ) # plot player positions
+        ax.plot( team[x_columns], team[y_columns], color+'o', markersize=PlayerMarkerSize, alpha=PlayerAlpha ) # plot player positions
         if include_player_velocities:
             vx_columns = ['{}_vx'.format(c[:-2]) for c in x_columns] # column header for player x positions
             vy_columns = ['{}_vy'.format(c[:-2]) for c in y_columns] # column header for player y positions
@@ -137,7 +137,7 @@ def plot_frame( hometeam, awayteam, figax=None, team_colors=('r','b'), field_dim
         if annotate:
             [ ax.text( team[x]+0.5, team[y]+0.5, x.split('_')[1], fontsize=10, color=color  ) for x,y in zip(x_columns,y_columns) if not ( np.isnan(team[x]) or np.isnan(team[y]) ) ] 
     # plot ball
-    ax.plot( hometeam['ball_x'], hometeam['ball_y'], 'ko', MarkerSize=6, alpha=1.0, LineWidth=0)
+    ax.plot( hometeam['ball_x'], hometeam['ball_y'], 'ko', markersize=6, alpha=1.0, linewidth=0)
     return fig,ax
     
 def save_match_clip(hometeam,awayteam, fpath, fname='clip_test', figax=None, frames_per_second=25, team_colors=('r','b'), field_dimen = (106.0,68.0), include_player_velocities=False, PlayerMarkerSize=10, PlayerAlpha=0.7):
@@ -247,8 +247,48 @@ def plot_events( events, figax=None, field_dimen = (106.0,68), indicators = ['Ma
     return fig,ax
 
 
+def plot_pitchcontrol_for_event( event_id, events,  tracking_home, tracking_away, PPCF, alpha = 0.7, include_player_velocities=True, annotate=False, field_dimen = (106.0,68)):
+    """ plot_pitchcontrol_for_event( event_id, events,  tracking_home, tracking_away, PPCF )
 
+    Plots the pitch control surface at the instant of the event given by the event_id. Player and ball positions are overlaid.
 
+    Parameters
+    -----------
+        event_id: Index (not row) of the event that describes the instant at which the pitch control surface should be calculated
+        events: Dataframe containing the event data
+        tracking_home: (entire) tracking DataFrame for the Home team
+        tracking_away: (entire) tracking DataFrame for the Away team
+        PPCF: Pitch control surface (dimen (n_grid_cells_x,n_grid_cells_y) ) containing pitch control probability for the attcking team (as returned by the generate_pitch_control_for_event in Metrica_PitchControl)
+        alpha: alpha (transparency) of player markers. Default is 0.7
+        include_player_velocities: Boolean variable that determines whether player velocities are also plotted (as quivers). Default is False
+        annotate: Boolean variable that determines with player jersey numbers are added to the plot (default is False)
+        field_dimen: tuple containing the length and width of the pitch in meters. Default is (106,68)
+
+    NB: this function no longer requires xgrid and ygrid as an input
+
+    Returrns
+    -----------
+       fig,ax : figure and aixs objects (so that other data can be plotted onto the pitch)
+
+    """
+
+    # pick a pass at which to generate the pitch control surface
+    pass_frame = events.loc[event_id]['Start Frame']
+    pass_team = events.loc[event_id].Team
+
+    # plot frame and event
+    fig,ax = plot_pitch(field_color='white', field_dimen = field_dimen)
+    plot_frame( tracking_home.loc[pass_frame], tracking_away.loc[pass_frame], figax=(fig,ax), PlayerAlpha=alpha, include_player_velocities=include_player_velocities, annotate=annotate )
+    plot_events( events.loc[event_id:event_id], figax = (fig,ax), indicators = ['Marker','Arrow'], annotate=False, color= 'k', alpha=1 )
+
+    # plot pitch control surface
+    if pass_team=='Home':
+        cmap = 'bwr'
+    else:
+        cmap = 'bwr_r'
+    ax.imshow(np.flipud(PPCF), extent=(-field_dimen[0]/2., field_dimen[0]/2., -field_dimen[1]/2., field_dimen[1]/2.),interpolation='spline36',vmin=0.0,vmax=1.0,cmap=cmap,alpha=0.5)
+
+    return fig,ax
 
 
 

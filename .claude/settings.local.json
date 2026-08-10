@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import matplotlib; matplotlib.use\\('Agg'\\)\")",
+      "Bash(MPLBACKEND=Agg python3 plot_RiskyPasses.py)",
+      "Bash(python -c \"import pandas\")",
+      "Bash(pip show *)",
+      "Bash(MPLBACKEND=Agg python plot_RiskyPasses.py)",
+      "Bash(MPLBACKEND=Agg python plot_AccDecRatio.py)",
+      "Bash(MPLBACKEND=Agg python plot_H1_SpaceControlValidation.py)",
+      "Bash(MPLBACKEND=Agg python plot_H2_DecisionQualityValidation.py)",
+      "Bash(MPLBACKEND=Agg python plot_H3_OffBallRunValue.py)",
+      "Bash(tasklist)",
+      "Bash(python -c ' *)",
+      "WebSearch",
+      "Bash(python -c \"import mplsoccer; print\\(mplsoccer.__version__\\)\")",
+      "Bash(MPLBACKEND=Agg python plot_Euro2024_SpaceControl.py)",
+      "Bash(cd \"c:/Users/aldi/Documents/GitHub/Soccermatics/course/lessons/lesson8\" && ls -la Euro2024_space_control.csv StatsBomb_ArMatSpaceControl.py 2>&1 *)",
+      "Read(//c/Users/aldi/Documents/GitHub/data/**)"
+    ]
+  }
+}

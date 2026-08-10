@@ -1,3 +1,6 @@
+# StatsBomb open-data cache (downloaded on demand, large)
+course/lessons/data/StatsBomb_Euro2024_cache/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

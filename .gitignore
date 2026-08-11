@@ -1,6 +1,9 @@
 # StatsBomb open-data cache (downloaded on demand, large)
 course/lessons/data/StatsBomb_Euro2024_cache/
 
+# SkillCorner open-data cache (downloaded on demand, ~90MB tracking file per match)
+course/lessons/data/SkillCorner/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

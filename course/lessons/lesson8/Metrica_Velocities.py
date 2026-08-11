@@ -55,7 +55,18 @@ def calc_player_velocities(team, smoothing=True, filter_='Savitzky-Golay', windo
             raw_speed = np.sqrt( vx**2 + vy**2 )
             vx[ raw_speed>maxspeed ] = np.nan
             vy[ raw_speed>maxspeed ] = np.nan
-            
+
+        # vx/vy can have NaN at this point from two sources: the very first sample of a
+        # .diff() series (nothing precedes it -- guaranteed, every call) and, occasionally,
+        # a maxspeed-outlier rejection landing on the last sample before a half-time
+        # boundary (seen even in Metrica's own sample data). Modern scipy's savgol_filter
+        # (mode='interp') hard-rejects ANY NaN in its input, where older scipy tolerated
+        # them; interpolate over these isolated points -- extrapolating from the nearest
+        # valid value at the very edges -- before smoothing sees them.
+        if smoothing and (vx.isna().any() or vy.isna().any()):
+            vx = vx.interpolate(limit_direction='both')
+            vy = vy.interpolate(limit_direction='both')
+
         if smoothing:
             if filter_=='Savitzky-Golay':
                 # calculate first half velocity

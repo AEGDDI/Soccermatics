@@ -36,6 +36,22 @@ because Metrica's bundled sample data doesn't have them:
    function needs a complete row (e.g. Metrica_PitchControl.initialise_players,
    via `player.inframe`).
 
+4. **Substitutions and `calc_player_velocities`.** A substitute's columns are NaN for
+   their entire time on the bench -- tens of minutes, far past `interpolate_limit` --
+   which `read_tracking_data` itself handles fine (it only requires the *ball* to have
+   output for a row to survive, not every player ever listed; a substitute's own NaN
+   stretch is left as-is, same as any out-of-frame player). But
+   `Metrica_Velocities.calc_player_velocities` smooths each player's column as one
+   continuous stretch across a whole half, which breaks (the same NaN-intolerant
+   Savitzky-Golay issue described in `Metrica_Velocities.py`, but for a stretch far
+   longer than that fix's isolated-point interpolation can cover) if fed a column
+   that's genuinely NaN for tens of minutes before a substitute enters. Metrica's own
+   sample data never hits this -- its tracking files only ever list the fixed starting
+   XI. Not fixed here: compute velocities on a frame_windows read that doesn't span a
+   substitution (e.g. one period, checked against
+   `match_json['players'][].start_time`/`end_time` first), or restrict to players who
+   were on the pitch for the entire window before calling calc_player_velocities.
+
 Data source: https://github.com/SkillCorner/opendata (CC BY-NC-SA 4.0). The tracking
 file for a single match is ~90MB and Git-LFS-hosted, so it is downloaded on demand into
 `data_dir` (gitignored) rather than committed -- see `download_match`.
@@ -72,15 +88,19 @@ def download_matches_json(data_dir):
         return json.load(f)
 
 
-def download_match(match_id, data_dir, force=False):
-    """ download_match(match_id, data_dir, force=False)
+def download_match(match_id, data_dir, force=False, dynamic_events=False):
+    """ download_match(match_id, data_dir, force=False, dynamic_events=False)
 
-    Downloads the two files this module needs for `match_id` into `data_dir`:
+    Downloads the files this module needs for `match_id` into `data_dir`:
     `{id}_match.json` (lineups, team/player metadata, pitch size, period boundaries)
     and `{id}_tracking_extrapolated.jsonl` (~90MB, Git-LFS-hosted, so it is fetched
     through the LFS media endpoint rather than raw.githubusercontent.com, which would
     otherwise silently return a ~130-byte LFS pointer file instead of the real data).
-    Skips re-downloading if both files already exist, unless `force=True`.
+    Skips re-downloading a file that already exists, unless `force=True`.
+
+    `dynamic_events=True` also downloads `{id}_dynamic_events.csv` (SkillCorner's
+    "Game Intelligence" pass/event log, needed by SkillCorner_EPV.load_pass_events --
+    a few MB, not LFS-hosted, so a plain fetch).
     """
     os.makedirs(data_dir, exist_ok=True)
     match_json_path = os.path.join(data_dir, f"{match_id}_match.json")
@@ -92,6 +112,11 @@ def download_match(match_id, data_dir, force=False):
         urllib.request.urlretrieve(
             f"{LFS_BASE}/matches/{match_id}/{match_id}_tracking_extrapolated.jsonl", tracking_path
         )
+    if dynamic_events:
+        events_path = os.path.join(data_dir, f"{match_id}_dynamic_events.csv")
+        if force or not os.path.exists(events_path):
+            urllib.request.urlretrieve(f"{RAW_BASE}/matches/{match_id}/{match_id}_dynamic_events.csv", events_path)
+        return match_json_path, tracking_path, events_path
     return match_json_path, tracking_path
 
 
@@ -199,9 +224,10 @@ def read_tracking_data(data_dir, match_id, frame_windows=None, interpolate_limit
     Parameters
     ----------
     frame_windows: list of (start_frame, end_frame) tuples, inclusive, or None to read
-        the whole match (every period in `{match_id}_match.json`'s match_periods). A
-        match-length read streams ~90MB of JSON lines and takes on the order of a
-        minute; pass explicit windows for quick example/demo reads.
+        every period in `{match_id}_match.json`'s match_periods. WARNING: see point 4
+        in the module docstring -- `None` returns an empty result on any match with a
+        substitution, silently. Prefer a single substitution-free window (e.g. one
+        period, or up to the first substitution) until that's fixed.
     interpolate_limit: max consecutive missing frames to linearly interpolate across
         (see module docstring, point 3). Gaps longer than this are left as NaN and
         dropped.
@@ -253,7 +279,19 @@ def read_tracking_data(data_dir, match_id, frame_windows=None, interpolate_limit
     tracking["Time [s]"] = tracking.index / FRAME_RATE_HZ
     pos_cols = [c for c in tracking.columns if c.endswith("_x") or c.endswith("_y")]
     tracking[pos_cols] = tracking[pos_cols].interpolate(method="linear", limit=interpolate_limit, limit_area="inside")
-    tracking = tracking.dropna(subset=pos_cols)
+    # Drop rows with no tracking output at all (point 3), identified via the ball alone --
+    # NOT via every player column, which would (silently, previously) empty the whole
+    # result on any match with a substitution (point 4): a substitute's columns are
+    # genuinely NaN for their entire time on the bench, far past interpolate_limit, and
+    # requiring all of them non-null at once means no row ever qualifies. Individual
+    # players' NaN is left in place -- Metrica_PitchControl.initialise_players already
+    # excludes an out-of-frame player via `player.inframe` rather than erroring.
+    tracking = tracking.dropna(subset=["ball_x", "ball_y"])
+    if len(tracking) == 0:
+        raise ValueError(
+            f"No tracking output at all in frame_windows={frame_windows} for match {match_id} -- "
+            "check the window falls inside a period's (start_frame, end_frame)."
+        )
 
     extra_cols = ["ball_x", "ball_y", "possession_team"]
     home_cols = ["Period", "Time [s]"] + _squad_on_pitch_columns(tracking, "Home_") + extra_cols

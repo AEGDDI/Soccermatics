@@ -17,7 +17,10 @@
       "Bash(python -c \"import mplsoccer; print\\(mplsoccer.__version__\\)\")",
       "Bash(MPLBACKEND=Agg python plot_Euro2024_SpaceControl.py)",
       "Bash(cd \"c:/Users/aldi/Documents/GitHub/Soccermatics/course/lessons/lesson8\" && ls -la Euro2024_space_control.csv StatsBomb_ArMatSpaceControl.py 2>&1 *)",
-      "Read(//c/Users/aldi/Documents/GitHub/data/**)"
+      "Read(//c/Users/aldi/Documents/GitHub/data/**)",
+      "Bash(rm -rf plot_Euro2024_SpaceControl.py StatsBomb_ArMatSpaceControl.py Euro2024_space_control.csv Euro2024_space_control_distribution.png Euro2024_space_control_leaderboard.csv Euro2024_space_control_leaderboard.png)",
+      "Bash(rm -rf \"../data/StatsBomb_Euro2024_cache\")",
+      "Bash(MPLBACKEND=Agg python plot_SkillCornerEPV.py)"
     ]
   }
 }

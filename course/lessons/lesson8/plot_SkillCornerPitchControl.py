@@ -8,11 +8,10 @@ unmodified Spearman pitch-control model against a different tracking provider --
 (10 matches, 2024/25 Australian A-League) -- as a check that the pipeline generalises
 rather than being implicitly tuned to Metrica's own data.
 
-This is a genuinely different kind of source to `StatsBomb_ArMatSpaceControl.py`'s
-freeze frames: SkillCorner is real frame-by-frame tracking (so real velocities, not
-zero), just from broadcast video rather than a fixed stadium camera rig, which brings
-its own data-quality quirks -- see `SkillCorner_IO.py`'s module docstring for the three
-that mattered here (coordinate convention, substitutes, and frame dropouts).
+This is real frame-by-frame tracking (so real velocities, computed the normal way),
+just from broadcast video rather than a fixed stadium camera rig, which brings its own
+data-quality quirks -- see `SkillCorner_IO.py`'s module docstring for the three that
+mattered here (coordinate convention, substitutes, and frame dropouts).
 
 The match's tracking file (~90MB) is downloaded on demand into
 `../data/SkillCorner/` (gitignored) the first time this runs.
@@ -106,8 +105,8 @@ print(f"Pitch control surface computed ({PPCFa.size} cells, sum check {checksum:
 # Plot
 # ----------------------------
 # Reuses Metrica_Viz.plot_pitch for the pitch itself; the control surface and player
-# markers are drawn directly, the same way StatsBomb_ArMatSpaceControl-style scripts do,
-# since plot_pitchcontrol_for_event expects Metrica's event schema (see module notes).
+# markers are drawn directly, since plot_pitchcontrol_for_event expects Metrica's event
+# schema (see module notes).
 
 fig, ax = mviz.plot_pitch(field_dimen=field_dimen, field_color="white")
 ax.imshow(np.flipud(PPCFa), extent=(-field_dimen[0] / 2, field_dimen[0] / 2, -field_dimen[1] / 2, field_dimen[1] / 2),

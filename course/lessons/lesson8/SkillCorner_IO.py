@@ -6,11 +6,10 @@ Module for reading SkillCorner's open broadcast-tracking data
 the same tracking DataFrame shape Metrica_IO.tracking_data() produces -- one row per
 frame, columns named "{Home|Away}_{jersey}_x"/"_y" plus "ball_x"/"ball_y", "Period" and
 "Time [s]" -- so Metrica_Velocities.calc_player_velocities and Metrica_PitchControl's
-Spearman model run against it unmodified. Where StatsBomb_ArMatSpaceControl.py adapts
-this lesson's pitch-control code to freeze-frame data with no velocity at all,
-SkillCorner is a second *tracking* dataset -- a genuine second ground-truth source,
-not an approximation, useful for checking the pipeline isn't overfit to Metrica's
-two sample games specifically.
+Spearman model run against it unmodified. SkillCorner is a second, independent
+*tracking* dataset -- a genuine second ground-truth source, not an approximation --
+useful for checking the pipeline isn't overfit to Metrica's two sample games
+specifically.
 
 Three things this module has to handle that Metrica_IO.tracking_data() never does,
 because Metrica's bundled sample data doesn't have them:
@@ -318,4 +317,106 @@ def read_match_data(data_dir, match_id, frame_windows=None, interpolate_limit=20
     tracking_home, tracking_away = read_tracking_data(
         data_dir, match_id, frame_windows=frame_windows, interpolate_limit=interpolate_limit
     )
+    return tracking_home, tracking_away, match_summary(match_json)
+
+
+# ----------------------------------------------------------------------------------
+# Full-match reads that survive substitutions (see module docstring, point 4)
+# ----------------------------------------------------------------------------------
+
+def find_stable_roster_windows(match_json):
+    """ find_stable_roster_windows(match_json)
+
+    Splits each period into the largest possible (start_frame, end_frame) chunks
+    within which the 22 players on the pitch never change -- i.e. chunks with no
+    substitution inside them. A substitution shows up in `players[].playing_time.
+    by_period` as one player's entry starting mid-period (they came on) and/or
+    another's ending mid-period (they went off); collecting every such mid-period
+    start/end across the whole squad, per period, gives every "roster changed here"
+    frame. Sorting and de-duplicating those against the period's own boundaries
+    produces the chunk list.
+
+    Feeding tracking reads through these chunks (see
+    `read_full_match_with_velocities`) instead of one window per half is what makes it
+    possible to compute velocities for a whole match with substitutions, rather than
+    stopping at the first one (module docstring, point 4).
+
+    One real quirk this has to filter out: a period's own `end_frame` and the
+    `end_frame` most still-on-pitch players carry in `by_period` are often off by one
+    (e.g. period end_frame 70420, but most players' own last tracked frame is 70419)
+    -- that's just where a period's tracking data runs out, not a substitution, and
+    left unfiltered it produces a spurious 1-frame trailing "window" nobody actually
+    played in. Any window shorter than `min_frames` is merged into the previous one.
+    """
+    windows = []
+    for period in match_json["match_periods"]:
+        period_name = f"period_{period['period']}"
+        lo, hi = period["start_frame"], period["end_frame"]
+        change_points = set()
+        for p in match_json["players"]:
+            for bp in p["playing_time"]["by_period"]:
+                if bp["name"] != period_name:
+                    continue
+                if lo < bp["start_frame"] <= hi:
+                    change_points.add(bp["start_frame"])
+                if bp["end_frame"] is not None and lo <= bp["end_frame"] < hi:
+                    change_points.add(bp["end_frame"] + 1)
+        boundaries = sorted({lo, hi + 1} | change_points)
+        period_windows = [(boundaries[i], boundaries[i + 1] - 1) for i in range(len(boundaries) - 1)]
+
+        min_frames = 10  # shorter than this isn't a real distinct roster stretch, just end-of-data noise
+        merged = []
+        for w_lo, w_hi in period_windows:
+            if merged and (w_hi - w_lo + 1) < min_frames:
+                merged[-1] = (merged[-1][0], w_hi)  # fold into the previous window
+            else:
+                merged.append((w_lo, w_hi))
+        windows.extend(merged)
+    return windows
+
+
+def read_full_match_with_velocities(data_dir, match_id, interpolate_limit=20, window=7):
+    """ read_full_match_with_velocities(data_dir, match_id, interpolate_limit=20, window=7)
+
+    Like `read_match_data`, but covers the entire match -- including every
+    substitution -- with velocities already computed, by reading all of
+    `find_stable_roster_windows`'s substitution-safe chunks in a single pass over the
+    tracking file (`read_tracking_data` already reads the file once regardless of how
+    many disjoint windows it's given) and running
+    `Metrica_Velocities.calc_player_velocities` separately on each chunk before
+    stitching them back together. Requires the `Metrica_Velocities.calc_player_
+    velocities` single-period fix (see that module) -- each chunk is, by construction,
+    entirely within one period.
+
+    A chunk shorter than `window` frames (e.g. two substitutions on the same frame,
+    leaving a 0-length gap between them) can't be smoothed at all; velocities for that
+    chunk are computed unsmoothed (`smoothing=False`) rather than dropped.
+
+    Returns
+    -------
+    tracking_home, tracking_away, match_meta (see `match_summary`) -- velocities
+    (`_vx`/`_vy`/`_speed` columns) already present, spanning the whole match.
+    """
+    import Metrica_Velocities as mvel  # local import: avoids a hard dependency on scipy for callers who only need positions
+
+    match_json = read_match_json(data_dir, match_id)
+    windows = find_stable_roster_windows(match_json)
+
+    tracking_home_all, tracking_away_all = read_tracking_data(
+        data_dir, match_id, frame_windows=windows, interpolate_limit=interpolate_limit
+    )
+
+    home_chunks, away_chunks = [], []
+    for lo, hi in windows:
+        for tracking_all, chunks, prefix in [(tracking_home_all, home_chunks, "Home_"), (tracking_away_all, away_chunks, "Away_")]:
+            chunk = tracking_all[(tracking_all.index >= lo) & (tracking_all.index <= hi)]
+            if len(chunk) == 0:
+                continue
+            keep = ["Period", "Time [s]"] + _squad_on_pitch_columns(chunk, prefix) + ["ball_x", "ball_y", "possession_team"]
+            chunk = chunk[keep].copy()
+            chunk = mvel.calc_player_velocities(chunk, smoothing=len(chunk) >= window, window=window)
+            chunks.append(chunk)
+
+    tracking_home = pd.concat(home_chunks).sort_index()
+    tracking_away = pd.concat(away_chunks).sort_index()
     return tracking_home, tracking_away, match_summary(match_json)

@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 
 import SkillCorner_IO as scio
 import SkillCorner_EPV as scepv
-import Metrica_Velocities as mvel
 import Metrica_PitchControl as mpc
 import Metrica_EPV as mepv
 import Metrica_Viz as mviz
@@ -28,35 +27,17 @@ DATA_DIR = "../data/SkillCorner"
 MATCH_ID = 2017461  # Melbourne Victory vs Auckland FC -- see matches.json for the other 9
 
 ##############################################################################
-# Download and load -- the whole first half plus the substitution-free start of the
-# second (EPV needs a broad sample of passes, not just a couple of demo frames),
-# which takes on the order of 20-30 seconds.
+# Download and load -- the whole match, substitutions included
 # ----------------------------
-# Not frame_windows=None (the whole match): a substitute's tracking columns are NaN
-# for their entire time on the bench, and Metrica_Velocities.calc_player_velocities
-# smooths each player's column as one continuous stretch per half -- which breaks
-# across a stretch that long (see SkillCorner_IO's module docstring, point 4).
-# calc_player_velocities also needs *some* second-half data to find the half
-# boundary (its `Period.idxmax()`), so this uses all of period 1 plus period 2 up to
-# (not including) the first substitution, found directly from match.json's per-player
-# playing_time rather than parsing its display-time strings.
+# read_full_match_with_velocities reads every substitution-safe chunk of the match
+# (see SkillCorner_IO.find_stable_roster_windows) and computes velocities separately
+# within each one, so it covers the entire match rather than stopping at the first
+# substitution (see SkillCorner_IO's module docstring, point 4, and
+# Metrica_Velocities' single-period fix that makes this safe).
 
 scio.download_match(MATCH_ID, DATA_DIR, dynamic_events=True)
-match_json = scio.read_match_json(DATA_DIR, MATCH_ID)
-period_1, period_2 = match_json["match_periods"][0], match_json["match_periods"][1]
-first_sub_frame = min(
-    (bp["start_frame"] for p in match_json["players"] for bp in p["playing_time"]["by_period"]
-     if bp["name"] == "period_2" and bp["start_frame"] > period_2["start_frame"]),
-    default=period_2["end_frame"],
-)
-frame_windows = [(period_1["start_frame"], period_1["end_frame"]), (period_2["start_frame"], first_sub_frame - 1)]
-print(f"Period 2 used up to frame {first_sub_frame - 1} (first substitution at {first_sub_frame})")
-
-tracking_home, tracking_away, match_meta = scio.read_match_data(DATA_DIR, MATCH_ID, frame_windows=frame_windows)
+tracking_home, tracking_away, match_meta = scio.read_full_match_with_velocities(DATA_DIR, MATCH_ID)
 print(f"{match_meta['home_team']} (home) vs {match_meta['away_team']} (away): {len(tracking_home)} frames loaded")
-
-tracking_home = mvel.calc_player_velocities(tracking_home, smoothing=True)
-tracking_away = mvel.calc_player_velocities(tracking_away, smoothing=True)
 
 params = mpc.default_model_params()
 EPV = mepv.load_EPV_grid("../data/Metrica/EPV_grid.csv")

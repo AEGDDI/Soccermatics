@@ -67,22 +67,40 @@ def calc_player_velocities(team, smoothing=True, filter_='Savitzky-Golay', windo
             vx = vx.interpolate(limit_direction='both')
             vy = vy.interpolate(limit_direction='both')
 
+        # A tracking read confined to a single period (e.g. one substitution-safe chunk
+        # of a SkillCorner match, see SkillCorner_IO.read_full_match_with_velocities)
+        # has a constant Period column, so second_half_idx (= Period.idxmax(), the
+        # first occurrence of the max) lands on the very first row -- splitting into a
+        # 1-frame "first half" and an (n-1)-frame "second half". savgol_filter rejects
+        # a window (window_length=7) longer than its input, so that 1-frame slice
+        # errors out. When there's only one period present, just filter the whole
+        # chunk in one pass instead of splitting.
+        single_period = team['Period'].nunique() <= 1
+
         if smoothing:
             if filter_=='Savitzky-Golay':
-                # calculate first half velocity
-                vx.loc[:second_half_idx] = signal.savgol_filter(vx.loc[:second_half_idx],window_length=window,polyorder=polyorder)
-                vy.loc[:second_half_idx] = signal.savgol_filter(vy.loc[:second_half_idx],window_length=window,polyorder=polyorder)        
-                # calculate second half velocity
-                vx.loc[second_half_idx:] = signal.savgol_filter(vx.loc[second_half_idx:],window_length=window,polyorder=polyorder)
-                vy.loc[second_half_idx:] = signal.savgol_filter(vy.loc[second_half_idx:],window_length=window,polyorder=polyorder)
+                if single_period:
+                    vx.loc[:] = signal.savgol_filter(vx,window_length=window,polyorder=polyorder)
+                    vy.loc[:] = signal.savgol_filter(vy,window_length=window,polyorder=polyorder)
+                else:
+                    # calculate first half velocity
+                    vx.loc[:second_half_idx] = signal.savgol_filter(vx.loc[:second_half_idx],window_length=window,polyorder=polyorder)
+                    vy.loc[:second_half_idx] = signal.savgol_filter(vy.loc[:second_half_idx],window_length=window,polyorder=polyorder)
+                    # calculate second half velocity
+                    vx.loc[second_half_idx:] = signal.savgol_filter(vx.loc[second_half_idx:],window_length=window,polyorder=polyorder)
+                    vy.loc[second_half_idx:] = signal.savgol_filter(vy.loc[second_half_idx:],window_length=window,polyorder=polyorder)
             elif filter_=='moving average':
-                ma_window = np.ones( window ) / window 
-                # calculate first half velocity
-                vx.loc[:second_half_idx] = np.convolve( vx.loc[:second_half_idx] , ma_window, mode='same' ) 
-                vy.loc[:second_half_idx] = np.convolve( vy.loc[:second_half_idx] , ma_window, mode='same' )      
-                # calculate second half velocity
-                vx.loc[second_half_idx:] = np.convolve( vx.loc[second_half_idx:] , ma_window, mode='same' ) 
-                vy.loc[second_half_idx:] = np.convolve( vy.loc[second_half_idx:] , ma_window, mode='same' ) 
+                ma_window = np.ones( window ) / window
+                if single_period:
+                    vx.loc[:] = np.convolve( vx, ma_window, mode='same' )
+                    vy.loc[:] = np.convolve( vy, ma_window, mode='same' )
+                else:
+                    # calculate first half velocity
+                    vx.loc[:second_half_idx] = np.convolve( vx.loc[:second_half_idx] , ma_window, mode='same' )
+                    vy.loc[:second_half_idx] = np.convolve( vy.loc[:second_half_idx] , ma_window, mode='same' )
+                    # calculate second half velocity
+                    vx.loc[second_half_idx:] = np.convolve( vx.loc[second_half_idx:] , ma_window, mode='same' )
+                    vy.loc[second_half_idx:] = np.convolve( vy.loc[second_half_idx:] , ma_window, mode='same' )
                 
         
         # put player speed in x,y direction, and total speed back in the data frame

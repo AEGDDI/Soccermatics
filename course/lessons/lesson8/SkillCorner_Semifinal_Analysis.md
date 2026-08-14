@@ -105,38 +105,64 @@ grid of points and the real reception spot isn't required to land exactly on one
 small but genuinely satisfying check: the numbers agree with what a good footballer
 actually did.
 
+## All ten matches, and checking our numbers against SkillCorner's own
+
+Two follow-ups from the list below, done together: running the same pipeline across
+every match in the open dataset (`plot_SkillCornerAllMatches.py`), and checking our
+independently-computed numbers against SkillCorner's own precomputed pass metrics —
+`player_targeted_xpass_completion` (their own pass-success-probability estimate, the
+counterpart of our `Patt_target`) and `player_targeted_xthreat` (a danger score for the
+pass's destination, the counterpart of our `EPV_target`) — for the exact same 6,770
+passes across all 10 matches.
+
+**The leaderboard scales up cleanly.** With real playing-time data (not an
+approximation) and a large enough sample, a cross-match "value added per 90" ranking
+becomes meaningful in a way one match never could be: Léo Sena, J. Brimmer, and
+J. O'Shea top the list (minimum 20 passes across the dataset). Full list:
+`SkillCorner_AllMatches_leaderboard.csv`.
+
+**The comparison against SkillCorner's own metrics is the more interesting result —
+and it's a genuine, checked finding, not a bug.** The two barely agree:
+
+![Comparison scatter](SkillCorner_AllMatches_comparison.png)
+
+Pearson correlation is weakly positive (r=0.09 for pass success, r=0.20 for
+destination value), but the rank-based Spearman correlation — less easily fooled by
+both distributions sharing the same skewed shape — is close to zero for both (0.09 and
+-0.02). Splitting by match confirms it: per-match correlations range from -0.19 to
++0.27 with no consistent sign, which is what "no real relationship" looks like, not
+what a fixable bug looks like (a genuine bug, like a flipped attack direction, would
+show up as a *consistent* error, not noise). Two passes with a technically-invalid
+`Patt_target` slightly above 1.0 (a rare numerical edge case in the pitch-control
+integration, 2 out of 6,770) were excluded before computing any of this.
+
+What the two methods *do* agree on, weakly: disagreement grows with pass distance.
+
+![Disagreement by distance](SkillCorner_AllMatches_disagreement_by_distance.png)
+
+Short passes are where a physics-based race-to-the-ball model and a trained classifier
+come closest to the same answer; long passes are where they diverge most — sensible,
+since a longer pass depends on more that the two approaches could reasonably weigh
+differently (ball flight time, defender reaction, trajectory). The honest takeaway
+isn't "one model is right and one is wrong" — it's that a physics-based pitch-control
+probability and a trained pass-success classifier are measuring genuinely different
+things, even when both are named to sound like the same thing.
+
 ## How to develop this analysis further
 
-This first pass only used a thin slice of what's actually in SkillCorner's data — the
-positions, and a filtered list of successful passes. Concrete next steps, roughly in
-order of how much new work each needs:
+Concrete next steps, roughly in order of how much new work each needs:
 
-**Using data we already have, no new downloads:**
-
-- **Compare our numbers against SkillCorner's own.** Their event log already includes
-  its own estimate of a pass's difficulty and threat (`xthreat`, `xpass_completion`),
-  computed independently of our pitch-control model. Plotting ours against theirs,
-  pass by pass, is a direct check on whether the two approaches agree — and if they
-  don't, *where* they disagree is often the more interesting finding.
 - **Bring in off-ball runs, already tagged.** SkillCorner's event log separately lists
-  hundreds of off-the-ball sprints in this match, each already classified by type,
-  without needing to infer anything from raw tracking. Scoring how much space or value
-  each run created (the same pitch-control idea, applied to a player who never touches
-  the ball) would extend this from "who passed well" to "who moved well."
-- **Use exact playing time.** Rather than approximating minutes from event timestamps,
-  the match file records precisely how long each player was on the pitch, split into
-  time spent with their team in and out of possession — a more accurate basis for any
-  per-90 comparison between players.
+  hundreds of off-the-ball sprints per match, each already classified by type, without
+  needing to infer anything from raw tracking. Scoring how much space or value each run
+  created (the same pitch-control idea, applied to a player who never touches the ball)
+  would extend this from "who passed well" to "who moved well."
 - **Look at pressing and defensive shape.** The data tracks how compact each team's
   defensive line is and how quickly it shifts, frame by frame — a different lens on the
   same tracking data, focused on defending rather than passing.
-
-**Needing more data, still freely available:**
-
-- **Expand to the other 9 matches.** This dataset covers ten A-League matches in total.
-  Running the same pipeline across all of them turns "how one player performed in one
-  match" into an actual sample size — enough to start comparing players and teams
-  meaningfully rather than describing a single game.
+- **Dig into *why* the comparison above disagrees so much.** The distance pattern is a
+  first clue, not a full explanation — worth checking against pass difficulty
+  (pressure, number of defenders nearby), not just raw distance.
 
 ## Takeaways
 
@@ -145,5 +171,10 @@ order of how much new work each needs:
    pass.
 2. **The best pass in the match, by this measure, was also the one the model would have
    picked itself** — a real, if small, vote of confidence in the approach.
-3. **This is one match out of ten available**, and one pass examined closely out of
-   536 — a demonstration of the method, not a verdict on any player.
+3. **Scaled up to all 10 matches (6,770 passes)**, the pipeline holds up, and the
+   cross-match leaderboard becomes genuinely meaningful with real playing-time data.
+4. **Our numbers and SkillCorner's own barely correlate** (Spearman rho close to zero,
+   checked per-match to rule out a bug) — a real, useful finding: a physics-based
+   pitch-control model and a trained classifier can both be reasonable approaches and
+   still land on very different answers for the same individual pass, more so the
+   longer the pass.

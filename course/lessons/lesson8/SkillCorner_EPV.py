@@ -38,6 +38,7 @@ import pandas as pd
 
 import Metrica_PitchControl as mpc
 import Metrica_EPV as mepv
+import SkillCorner_IO as scio
 
 
 def load_pass_events(data_dir, match_id, match_meta):
@@ -47,8 +48,15 @@ def load_pass_events(data_dir, match_id, match_meta):
     tracking file, see SkillCorner_IO.download_match -- note dynamic_events.csv is
     NOT LFS-hosted, unlike the tracking file, so a plain raw.githubusercontent.com
     fetch is fine for it) and returns completed passes as one row per pass:
-    event_id, frame_start, period, side ('Home'/'Away'), passer/receiver names, and
-    start_pos/target_pos as (x,y) tuples.
+    event_id, frame_start, period, side ('Home'/'Away'), passer/receiver names and ids,
+    start_pos/target_pos as (x,y) tuples, and SkillCorner's own
+    player_targeted_xthreat/player_targeted_xpass_completion for that same pass (NOT
+    the bare xthreat/xpass_completion columns -- those are always empty on pass rows,
+    populated for other event types instead; verified directly against the data).
+
+    passer_id/receiver_id (SkillCorner's own player ids, not just names) are carried
+    through so a leaderboard built across multiple matches can join on a stable key --
+    two different clubs could plausibly share a player's short name, ids can't collide.
     """
     path = os.path.join(data_dir, f"{match_id}_dynamic_events.csv")
     df = pd.read_csv(path, low_memory=False)
@@ -63,7 +71,9 @@ def load_pass_events(data_dir, match_id, match_meta):
 
     return passes.rename(columns={
         "frame_start": "frame", "player_name": "passer", "player_targeted_name": "receiver",
-    })[["event_id", "frame", "period", "side", "passer", "receiver", "start_pos", "target_pos"]].reset_index(drop=True)
+        "player_id": "passer_id", "player_targeted_id": "receiver_id",
+    })[["event_id", "frame", "period", "side", "passer", "passer_id", "receiver", "receiver_id",
+        "start_pos", "target_pos", "player_targeted_xthreat", "player_targeted_xpass_completion"]].reset_index(drop=True)
 
 
 def attack_direction_for_period(match_meta, period, side):
@@ -116,6 +126,108 @@ def calculate_epv_added(pass_row, tracking_home, tracking_away, GK_numbers, EPV,
     EEPV_added = Patt_target * EPV_target - Patt_start * EPV_start
     EPV_difference = EPV_target - EPV_start
     return EEPV_added, EPV_difference
+
+
+def calculate_epv_components(pass_row, tracking_home, tracking_away, GK_numbers, EPV, params, match_meta,
+                              field_dimen=(105., 68.)):
+    """ calculate_epv_components(pass_row, tracking_home, tracking_away, GK_numbers, EPV, params, match_meta, field_dimen=(105.,68.))
+
+    Same computation as `calculate_epv_added`, but returns the intermediate values too
+    -- needed to compare against SkillCorner's own per-pass metrics, which aren't
+    deltas: `player_targeted_xpass_completion` is a probability-of-success estimate for
+    the target alone (the counterpart of `Patt_target` here, not `EEPV_added`), and
+    `player_targeted_xthreat` is a danger/value score for the target location alone
+    (the counterpart of `EPV_target`). `calculate_epv_added` is left as-is (nothing
+    depending on its 2-value return breaks); this is an additive sibling.
+
+    Returns
+    -----------
+        dict with Patt_start, EPV_start, Patt_target, EPV_target, EEPV_added, EPV_difference
+    """
+    pass_start_pos = np.array(pass_row["start_pos"])
+    pass_target_pos = np.array(pass_row["target_pos"])
+    attack_direction = attack_direction_for_period(match_meta, pass_row["period"], pass_row["side"])
+
+    attacking_players, defending_players = _initialise_attacking_defending(pass_row, tracking_home, tracking_away, GK_numbers, params)
+    attacking_players = mpc.check_offsides(attacking_players, defending_players, pass_start_pos, GK_numbers)
+
+    Patt_start, _ = mpc.calculate_pitch_control_at_target(pass_start_pos, attacking_players, defending_players, pass_start_pos, params)
+    Patt_target, _ = mpc.calculate_pitch_control_at_target(pass_target_pos, attacking_players, defending_players, pass_start_pos, params)
+
+    EPV_start = mepv.get_EPV_at_location(pass_start_pos, EPV, attack_direction=attack_direction, field_dimen=field_dimen)
+    EPV_target = mepv.get_EPV_at_location(pass_target_pos, EPV, attack_direction=attack_direction, field_dimen=field_dimen)
+
+    return {
+        "Patt_start": Patt_start, "EPV_start": EPV_start,
+        "Patt_target": Patt_target, "EPV_target": EPV_target,
+        "EEPV_added": Patt_target * EPV_target - Patt_start * EPV_start,
+        "EPV_difference": EPV_target - EPV_start,
+    }
+
+
+def score_match(data_dir, match_id, params=None, EPV=None):
+    """ score_match(data_dir, match_id, params=None, EPV=None)
+
+    Reusable per-match pipeline: downloads (cached) the match's tracking + event data,
+    reads the whole match with velocities (`SkillCorner_IO.read_full_match_with_
+    velocities`, substitution-safe), scores every completed pass with
+    `calculate_epv_components`, and returns one row per successfully-scored pass with
+    our components alongside SkillCorner's own `player_targeted_xthreat`/
+    `player_targeted_xpass_completion` for the same pass (already joined in by
+    `load_pass_events`) -- ready to concatenate across multiple matches.
+
+    `params`/`EPV` can be passed in to reuse across many `score_match` calls rather
+    than reloading `EPV_grid.csv` and rebuilding default params for every match;
+    defaults are created if omitted.
+
+    Also returns the loaded tracking_home/tracking_away/match_meta, so a caller that
+    wants to do something extra with one specific pass afterwards (e.g. illustrate it
+    with `find_max_value_added_target`, as `plot_SkillCornerEPV.py` does) doesn't have
+    to pay the cost of reading the whole match a second time.
+
+    Returns
+    -----------
+        results: DataFrame -- match_id, event_id, side, passer, passer_id, receiver,
+            receiver_id, pass_distance, Patt_target, EPV_target, EEPV_added,
+            EPV_difference, player_targeted_xthreat, player_targeted_xpass_completion
+        tracking_home, tracking_away, match_meta: as returned by
+            SkillCorner_IO.read_full_match_with_velocities
+    """
+    if params is None:
+        params = mpc.default_model_params()
+    if EPV is None:
+        EPV = mepv.load_EPV_grid("../data/Metrica/EPV_grid.csv")
+
+    scio.download_match(match_id, data_dir, dynamic_events=True)
+    tracking_home, tracking_away, match_meta = scio.read_full_match_with_velocities(data_dir, match_id)
+    GK_numbers = match_meta["GK_numbers"]
+    field_dimen = match_meta["field_dimen"]
+
+    passes = load_pass_events(data_dir, match_id, match_meta)
+
+    rows = []
+    for _, pass_row in passes.iterrows():
+        frame = int(pass_row["frame"])
+        if frame not in tracking_home.index or frame not in tracking_away.index:
+            continue
+        try:
+            components = calculate_epv_components(
+                pass_row, tracking_home, tracking_away, GK_numbers, EPV, params, match_meta, field_dimen=field_dimen
+            )
+        except (AssertionError, ValueError):
+            continue
+        pass_distance = float(np.linalg.norm(np.array(pass_row["target_pos"]) - np.array(pass_row["start_pos"])))
+        rows.append({
+            "match_id": match_id, "event_id": pass_row["event_id"], "side": pass_row["side"],
+            "passer": pass_row["passer"], "passer_id": pass_row["passer_id"],
+            "receiver": pass_row["receiver"], "receiver_id": pass_row["receiver_id"],
+            "pass_distance": pass_distance,
+            "Patt_target": components["Patt_target"], "EPV_target": components["EPV_target"],
+            "EEPV_added": components["EEPV_added"], "EPV_difference": components["EPV_difference"],
+            "player_targeted_xthreat": pass_row["player_targeted_xthreat"],
+            "player_targeted_xpass_completion": pass_row["player_targeted_xpass_completion"],
+        })
+    return pd.DataFrame(rows), tracking_home, tracking_away, match_meta
 
 
 def find_max_value_added_target(pass_row, tracking_home, tracking_away, GK_numbers, EPV, params, match_meta,

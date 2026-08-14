@@ -14,10 +14,8 @@ file (~90MB, cached after the first run) and its `dynamic_events.csv` pass log.
 """
 
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 
-import SkillCorner_IO as scio
 import SkillCorner_EPV as scepv
 import Metrica_PitchControl as mpc
 import Metrica_EPV as mepv
@@ -27,48 +25,25 @@ DATA_DIR = "../data/SkillCorner"
 MATCH_ID = 2017461  # Melbourne Victory vs Auckland FC -- see matches.json for the other 9
 
 ##############################################################################
-# Download and load -- the whole match, substitutions included
+# Download, load, and score every completed pass in the match
 # ----------------------------
-# read_full_match_with_velocities reads every substitution-safe chunk of the match
-# (see SkillCorner_IO.find_stable_roster_windows) and computes velocities separately
-# within each one, so it covers the entire match rather than stopping at the first
-# substitution (see SkillCorner_IO's module docstring, point 4, and
-# Metrica_Velocities' single-period fix that makes this safe).
-
-scio.download_match(MATCH_ID, DATA_DIR, dynamic_events=True)
-tracking_home, tracking_away, match_meta = scio.read_full_match_with_velocities(DATA_DIR, MATCH_ID)
-print(f"{match_meta['home_team']} (home) vs {match_meta['away_team']} (away): {len(tracking_home)} frames loaded")
+# score_match wraps: read_full_match_with_velocities (every substitution-safe chunk of
+# the match, see SkillCorner_IO.find_stable_roster_windows, so it covers the entire
+# match rather than stopping at the first substitution -- module docstring point 4,
+# and Metrica_Velocities' single-period fix that makes this safe) + load_pass_events +
+# calculate_epv_components for every pass. Also returns the loaded tracking data, reused
+# below for the "one pass in full" illustration instead of reading the match twice.
 
 params = mpc.default_model_params()
 EPV = mepv.load_EPV_grid("../data/Metrica/EPV_grid.csv")
+
+df, tracking_home, tracking_away, match_meta = scepv.score_match(DATA_DIR, MATCH_ID, params=params, EPV=EPV)
 GK_numbers = match_meta["GK_numbers"]
 field_dimen = match_meta["field_dimen"]
-
-##############################################################################
-# EPV added, every completed pass
-# ----------------------------
+print(f"{match_meta['home_team']} (home) vs {match_meta['away_team']} (away): {len(tracking_home)} frames loaded")
 
 passes = scepv.load_pass_events(DATA_DIR, MATCH_ID, match_meta)
 print(f"{len(passes)} completed passes in the match log")
-
-rows = []
-for _, pass_row in passes.iterrows():
-    frame = int(pass_row["frame"])
-    if frame not in tracking_home.index or frame not in tracking_away.index:
-        continue  # outside the loaded windows (post-substitution, or late in either half) or a dropout gap too long to interpolate
-    try:
-        EEPV_added, EPV_difference = scepv.calculate_epv_added(
-            pass_row, tracking_home, tracking_away, GK_numbers, EPV, params, match_meta, field_dimen=field_dimen
-        )
-    except (AssertionError, ValueError):
-        continue  # e.g. a goalkeeper not on the pitch that frame -- see check_offsides
-    rows.append({
-        "event_id": pass_row["event_id"], "side": pass_row["side"],
-        "passer": pass_row["passer"], "receiver": pass_row["receiver"],
-        "EEPV_added": EEPV_added, "EPV_difference": EPV_difference,
-    })
-
-df = pd.DataFrame(rows)
 print(f"Scored {len(df)} passes ({len(passes) - len(df)} skipped -- dropout gaps or missing GK)")
 print(df["EEPV_added"].describe())
 
